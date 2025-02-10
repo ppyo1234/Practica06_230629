@@ -1,0 +1,28 @@
+{
+  "dependencies": {
+    "body-parser": "^1.20.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "getmac": "^6.6.0",
+    "moment-timezone": "^0.5.46",
+    "mongoose": "^8.9.5",
+    "node-forge": "^1.3.1",
+    "os": "^0.1.2",
+    "request-ip": "^3.3.0",
+    "uuid": "^11.0.5"
+  },
+  "name": "practica04-230629-sesioneshttp",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "server": "nodemon app.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
