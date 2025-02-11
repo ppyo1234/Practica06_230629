@@ -94,9 +94,17 @@ app.post("/login", async (req, res) => {
     const sessionId = uuidv4();
     const clientIp = getClientIp(req);
     const { serverIp, serverMac } = getServerNetworkInfo();
-    const now = moment().utc().toDate(); // Guardar en UTC
+    const now = moment().tz(TIMEZONE).format("YYYY-MM-DDTHH:mm:ssZ");
 
     try {
+        // Buscar si existe una sesión previa con el mismo usuario
+        const existingSession = await Session.findOne({ email, macAddress });
+
+        let accumulatedDuration = 0;
+        if (existingSession) {
+            accumulatedDuration = existingSession.accumulatedDuration; // Recuperar el tiempo acumulado
+        }
+
         const newSession = new Session({
             sessionId,
             email,
@@ -106,8 +114,9 @@ app.post("/login", async (req, res) => {
             status: "Activa",
             serverIp,
             serverMac,
-            createdAt: now,  // Guardar en UTC
-            lastAccessedAt: now // Se inicia con el mismo valor que createdAt
+            createdAt: now, 
+            lastAccessedAt: now, 
+            accumulatedDuration // Mantener la duración anterior
         });
 
         await newSession.save();
@@ -116,6 +125,9 @@ app.post("/login", async (req, res) => {
         res.status(500).json({ message: "Error al guardar la sesión.", error });
     }
 });
+
+
+
 
 
 // Logout Endpoint
@@ -133,8 +145,19 @@ app.post("/logout", async (req, res) => {
             return res.status(404).json({ message: "No se encontró la sesión." });
         }
 
+        // Calcular la duración total antes de cerrar sesión
+        const createdAt = moment(session.createdAt);
+        const lastAccessedAt = moment(session.lastAccessedAt);
+        const now = moment().tz(TIMEZONE);
+        
+        // Tiempo total hasta el momento del logout
+        const totalDuration = now.diff(createdAt); // En milisegundos
+
+        // Guardar la duración acumulada y cambiar el estado
+        session.accumulatedDuration = totalDuration;
         session.status = "Finalizada por el Usuario";
-        session.lastAccessedAt = new Date();
+        session.lastAccessedAt = now.format("YYYY-MM-DDTHH:mm:ssZ"); 
+
         await session.save();
 
         res.status(200).json({ message: "Logout exitoso." });
@@ -142,6 +165,7 @@ app.post("/logout", async (req, res) => {
         res.status(500).json({ message: "Error al cerrar la sesión.", error });
     }
 });
+
 
 
 // Actualización de la sesión
@@ -153,28 +177,35 @@ app.post("/update", async (req, res) => {
     }
 
     try {
-        const session = await Session.findOneAndUpdate(
-            { sessionId },
-            {
-                ...(email && { email }),
-                ...(nickname && { nickname }),
-                lastAccessedAt: moment().utc().toDate() // Actualizar lastAccessedAt en UTC
-            },
-            { new: true }
-        );
+        const session = await Session.findOne({ sessionId });
 
+        // Validar si la sesión existe
         if (!session) {
             return res.status(404).json({ message: "No se encontró la sesión." });
         }
 
+        // Validar si la sesión está activa
+        if (session.status !== "Activa") {
+            return res.status(403).json({ message: "La sesión no está activa." });
+        }
+
+        // Actualizar datos permitidos
+        session.lastAccessedAt = moment().tz(TIMEZONE).format();
+        if (email) session.email = email;
+        if (nickname) session.nickname = nickname;
+
+        await session.save();
+
         res.status(200).json({
             message: "Sesión actualizada correctamente.",
-            session
+            session,
         });
     } catch (error) {
         res.status(500).json({ message: "Error al actualizar la sesión.", error });
     }
 });
+
+
 
 
 // Estado de la sesión
@@ -191,17 +222,19 @@ app.get("/status", async (req, res) => {
             return res.status(404).json({ message: "No se encontró la sesión." });
         }
 
-        // Convertir de UTC a la zona horaria correcta
         const now = moment().tz(TIMEZONE);
-        const lastAccessedAt = moment(session.lastAccessedAt).tz(TIMEZONE);
         const createdAt = moment(session.createdAt).tz(TIMEZONE);
+        const lastAccessedAt = moment(session.lastAccessedAt).tz(TIMEZONE);
+
+        let totalDurationMs = session.accumulatedDuration; 
+
+        // Si la sesión sigue activa, sumamos el tiempo desde el último acceso
+        if (session.status === "Activa") {
+            totalDurationMs += now.diff(createdAt);
+        }
 
         const inactivityDuration = moment.duration(now.diff(lastAccessedAt));
-        const totalDuration = moment.duration(now.diff(createdAt));
-
-        // También actualizar `lastAccessedAt` en la BD para que refleje la consulta
-        session.lastAccessedAt = moment().utc().toDate();
-        await session.save();
+        const totalDuration = moment.duration(totalDurationMs);
 
         res.status(200).json({
             message: "Sesión activa.",
@@ -224,15 +257,18 @@ app.get("/status", async (req, res) => {
         res.status(500).json({ message: "Error al recuperar la sesión.", error });
     }
 });
+
+
+
 // Lista de sesiones activas
 app.get("/sessions", async (req, res) => {
     try {
         const sessionList = await Session.find({ status: "Activa" }).lean();
-        const now = moment().tz(TIMEZONE);
+        const now = moment().tz(TIMEZONE); // Zona horaria local
 
         const formattedSessions = sessionList.map(session => {
-            const createdAt = moment(session.createdAt).tz(TIMEZONE);
-            const lastAccessedAt = moment(session.lastAccessedAt).tz(TIMEZONE);
+            const createdAt = moment(session.createdAt).tz(TIMEZONE); // Convertir de UTC a zona horaria local
+            const lastAccessedAt = moment(session.lastAccessedAt).tz(TIMEZONE); // Convertir de UTC a zona horaria local
             const inactivityDuration = moment.duration(now.diff(lastAccessedAt));
             const totalDuration = moment.duration(now.diff(createdAt));
 
@@ -253,6 +289,7 @@ app.get("/sessions", async (req, res) => {
         res.status(500).json({ message: "Error al recuperar las sesiones.", error });
     }
 });
+
 
 
 

@@ -11,10 +11,10 @@ const sessionSchema = new mongoose.Schema({
         enum: ["Activa", "Inactiva", "Finalizada por el Usuario", "Finalizada por Falla de Sistema"],
         default: "Activa"
     },
-    createdAt: { type: Date, default: Date.now },
-    lastAccessedAt: { type: Date, default: Date.now },
-    serverIp: { type: String, required: true },  
-    serverMac: { type: String, required: true }
+    createdAt: { type: String }, 
+    lastAccessedAt: { type: String },serverIp: { type: String, required: true },  
+    serverMac: { type: String, required: true },
+    accumulatedDuration: { type: Number, default: 0 } 
 }, { versionKey: false });
 
 const Session = mongoose.model("Session", sessionSchema);
