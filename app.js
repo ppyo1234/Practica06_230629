@@ -97,26 +97,24 @@ app.post("/login", async (req, res) => {
     const now = moment().tz(TIMEZONE).format("YYYY-MM-DDTHH:mm:ssZ");
 
     try {
-        // Buscar si existe una sesión previa con el mismo usuario
-        const existingSession = await Session.findOne({ email, macAddress });
+        const existingSession = await Session.findOne({ email, "clientData.macAddress": macAddress });
 
         let accumulatedDuration = 0;
         if (existingSession) {
-            accumulatedDuration = existingSession.accumulatedDuration; // Recuperar el tiempo acumulado
+            accumulatedDuration = existingSession.accumulatedDuration; 
         }
 
         const newSession = new Session({
             sessionId,
             email,
             nickname,
-            macAddress,
-            ip: clientIp,
+            clientData: { ip: clientIp, macAddress },
+            serverData: { ip: serverIp, macAddress: serverMac },
             status: "Activa",
-            serverIp,
-            serverMac,
-            createdAt: now, 
-            lastAccessedAt: now, 
-            accumulatedDuration // Mantener la duración anterior
+            createdAt: now,
+            lastAccessedAt: now,
+            inactivityTime: { hours: 0 },
+            accumulatedDuration
         });
 
         await newSession.save();
@@ -145,18 +143,13 @@ app.post("/logout", async (req, res) => {
             return res.status(404).json({ message: "No se encontró la sesión." });
         }
 
-        // Calcular la duración total antes de cerrar sesión
-        const createdAt = moment(session.createdAt);
-        const lastAccessedAt = moment(session.lastAccessedAt);
         const now = moment().tz(TIMEZONE);
-        
-        // Tiempo total hasta el momento del logout
-        const totalDuration = now.diff(createdAt); // En milisegundos
+        const createdAt = moment(session.createdAt, "YYYY-MM-DDTHH:mm:ssZ");  
+        const totalDuration = now.diff(createdAt); 
 
-        // Guardar la duración acumulada y cambiar el estado
         session.accumulatedDuration = totalDuration;
         session.status = "Finalizada por el Usuario";
-        session.lastAccessedAt = now.format("YYYY-MM-DDTHH:mm:ssZ"); 
+        session.lastAccessedAt = now.format("YYYY-MM-DDTHH:mm:ssZ");
 
         await session.save();
 
@@ -179,27 +172,21 @@ app.post("/update", async (req, res) => {
     try {
         const session = await Session.findOne({ sessionId });
 
-        // Validar si la sesión existe
         if (!session) {
             return res.status(404).json({ message: "No se encontró la sesión." });
         }
 
-        // Validar si la sesión está activa
         if (session.status !== "Activa") {
             return res.status(403).json({ message: "La sesión no está activa." });
         }
 
-        // Actualizar datos permitidos
-        session.lastAccessedAt = moment().tz(TIMEZONE).format();
+        session.lastAccessedAt = moment().tz(TIMEZONE).format("YYYY-MM-DDTHH:mm:ssZ");  
         if (email) session.email = email;
         if (nickname) session.nickname = nickname;
 
         await session.save();
 
-        res.status(200).json({
-            message: "Sesión actualizada correctamente.",
-            session,
-        });
+        res.status(200).json({ message: "Sesión actualizada correctamente.", session });
     } catch (error) {
         res.status(500).json({ message: "Error al actualizar la sesión.", error });
     }
@@ -211,6 +198,7 @@ app.post("/update", async (req, res) => {
 // Estado de la sesión
 app.get("/status", async (req, res) => {
     const { sessionId } = req.query;
+
     if (!sessionId) {
         return res.status(400).json({ message: "Falta el ID de sesión." });
     }
@@ -223,17 +211,16 @@ app.get("/status", async (req, res) => {
         }
 
         const now = moment().tz(TIMEZONE);
-        const createdAt = moment(session.createdAt).tz(TIMEZONE);
-        const lastAccessedAt = moment(session.lastAccessedAt).tz(TIMEZONE);
+        const createdAt = moment(session.createdAt, "YYYY-MM-DDTHH:mm:ssZ").tz(TIMEZONE);
+        const lastAccessedAt = moment(session.lastAccessedAt, "YYYY-MM-DDTHH:mm:ssZ").tz(TIMEZONE);
 
-        let totalDurationMs = session.accumulatedDuration; 
+        let totalDurationMs = session.accumulatedDuration;  
 
-        // Si la sesión sigue activa, sumamos el tiempo desde el último acceso
         if (session.status === "Activa") {
             totalDurationMs += now.diff(createdAt);
         }
 
-        const inactivityDuration = moment.duration(now.diff(lastAccessedAt));
+        const inactivityDuration = now.diff(lastAccessedAt, "hours");
         const totalDuration = moment.duration(totalDurationMs);
 
         res.status(200).json({
@@ -242,15 +229,13 @@ app.get("/status", async (req, res) => {
                 sessionId: session.sessionId,
                 email: session.email,
                 nickname: session.nickname,
-                macAddress: session.macAddress,
-                ip: session.ip,
+                clientData: session.clientData,
+                serverData: session.serverData,
                 status: session.status,
                 createdAt: createdAt.format("YYYY-MM-DD HH:mm:ss"),
                 lastAccessedAt: lastAccessedAt.format("YYYY-MM-DD HH:mm:ss"),
-                inactivity: `${inactivityDuration.hours()}:${inactivityDuration.minutes()}:${inactivityDuration.seconds()}`,
-                totalDuration: `${totalDuration.hours()}:${totalDuration.minutes()}:${totalDuration.seconds()}`,
-                serverIp: session.serverIp,
-                serverMac: session.serverMac
+                inactivityTime: { hours: inactivityDuration },
+                totalDuration: `${totalDuration.hours()}:${totalDuration.minutes()}:${totalDuration.seconds()}`
             }
         });
     } catch (error) {
@@ -259,24 +244,23 @@ app.get("/status", async (req, res) => {
 });
 
 
-
 // Lista de sesiones activas
 app.get("/sessions", async (req, res) => {
     try {
         const sessionList = await Session.find({ status: "Activa" }).lean();
-        const now = moment().tz(TIMEZONE); // Zona horaria local
+        const now = moment().tz(TIMEZONE);
 
         const formattedSessions = sessionList.map(session => {
-            const createdAt = moment(session.createdAt).tz(TIMEZONE); // Convertir de UTC a zona horaria local
-            const lastAccessedAt = moment(session.lastAccessedAt).tz(TIMEZONE); // Convertir de UTC a zona horaria local
-            const inactivityDuration = moment.duration(now.diff(lastAccessedAt));
+            const createdAt = moment(session.createdAt, "YYYY-MM-DDTHH:mm:ssZ").tz(TIMEZONE);
+            const lastAccessedAt = moment(session.lastAccessedAt, "YYYY-MM-DDTHH:mm:ssZ").tz(TIMEZONE);
+            const inactivityDuration = now.diff(lastAccessedAt, "hours");
             const totalDuration = moment.duration(now.diff(createdAt));
 
             return {
                 ...session,
                 createdAt: createdAt.format("YYYY-MM-DD HH:mm:ss"),
                 lastAccessedAt: lastAccessedAt.format("YYYY-MM-DD HH:mm:ss"),
-                inactivity: `${inactivityDuration.hours()}:${inactivityDuration.minutes()}:${inactivityDuration.seconds()}`,
+                inactivityTime: { hours: inactivityDuration },
                 totalDuration: `${totalDuration.hours()}:${totalDuration.minutes()}:${totalDuration.seconds()}`
             };
         });
@@ -289,6 +273,7 @@ app.get("/sessions", async (req, res) => {
         res.status(500).json({ message: "Error al recuperar las sesiones.", error });
     }
 });
+
 
 
 
