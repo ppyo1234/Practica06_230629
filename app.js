@@ -84,6 +84,47 @@ const getServerNetworkInfo = () => {
     return { serverIp: "0.0.0.0", serverMac: "00:00:00:00:00:00" };
 };
 
+setInterval(async () => {
+    const now = moment().tz(TIMEZONE);
+    const inactiveSessions = await Session.find({ status: "Activa" });
+
+    for (const session of inactiveSessions) {
+        const lastAccessedAt = moment(session.lastAccessedAt);
+        const inactivityDuration = now.diff(lastAccessedAt);
+
+        if (inactivityDuration > MAX_INACTIVITY_TIME) {
+            console.log(`Finalizando sesión por inactividad: ${session.sessionId}`);
+
+            session.status = "Inactiva";
+            session.accumulatedDuration += inactivityDuration;
+            session.lastAccessedAt = now.format("YYYY-MM-DDTHH:mm:ssZ");
+
+            await session.save();
+        }
+    }
+}, 60 * 1000); // Revisión cada minuto
+
+const finalizeSessionsOnShutdown = async () => {
+    console.log("Finalizando sesiones activas por falla de sistema...");
+    const now = moment().tz(TIMEZONE).format("YYYY-MM-DDTHH:mm:ssZ");
+
+    await Session.updateMany(
+        { status: "Activa" },
+        { 
+            status: "Finalizada por Falla de Sistema", 
+            lastAccessedAt: now 
+        }
+    );
+
+    console.log("Todas las sesiones activas han sido finalizadas.");
+    process.exit(0);
+};
+
+process.on("exit", finalizeSessionsOnShutdown);
+process.on("SIGINT", finalizeSessionsOnShutdown);
+process.on("SIGTERM", finalizeSessionsOnShutdown);
+
+
 app.post("/login", async (req, res) => {
     const { email, nickname, macAddress } = req.body;
 
